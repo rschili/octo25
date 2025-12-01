@@ -1,0 +1,40 @@
+{
+  "name": "week1part1",
+  "version": "1.0.0",
+  "main": "dist/main.mjs",
+  "type": "module",
+  "engines": {
+    "node": ">=22.14.0"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "node esbuild.config.mjs && npm run copy",
+    "copy": "cp data.txt dist/data.txt",
+    "test": "vitest",
+    "start": "node dist/main.mjs",
+    "lint": "eslint 'src/**/*.ts' --fix"
+  },
+  "files": [
+    "data.txt"
+  ],
+  "keywords": [],
+  "author": "Robert Schili",
+  "license": "MIT",
+  "description": "",
+  "devDependencies": {
+    "@eslint/js": "^9.37.0",
+    "@types/node": "^24.8.1",
+    "@typescript-eslint/eslint-plugin": "^8.46.1",
+    "@typescript-eslint/parser": "^8.46.1",
+    "esbuild": "^0.25.11",
+    "esbuild-node-externals": "^1.18.0",
+    "eslint": "^9.37.0",
+    "globals": "^16.4.0",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.46.1",
+    "vitest": "^3.2.4"
+  },
+  "dependencies": {
+    "chalk": "^5.6.2"
+  }
+}
