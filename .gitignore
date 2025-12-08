@@ -137,3 +137,7 @@ dist
 
 /workspace/
 buildInfo.ts
+
+# C# build output
+bin/
+obj/
