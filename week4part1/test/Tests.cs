@@ -1,7 +1,8 @@
-﻿namespace HammingTests;
+﻿namespace ParallelPathFinderTests;
 
 public class Tests
 {
+    // Test data provided with the assignment. The correct answer is 1 shortest path (AA -- AB -- BB -- CB -- ZZ)
     private const string TestDataSet = """
     graph G {
     "AA" -- "BA" [timestep="odd"];
@@ -75,5 +76,34 @@ public class Tests
 
         // Verify NodesByName count matches Nodes count
         await Assert.That(graph.NodesByName.Count).IsEqualTo(graph.Nodes.Count);
+    }
+
+    [Test]
+    public async Task ParallelPathFinder_FindsShortestPath()
+    {
+        // Load the test graph
+        Graph graph = DotFileReader.LoadFromDot(TestDataSet);
+        
+        // Get start and end nodes
+        var startNode = graph.NodesByName["AA"];
+        var endNode = graph.NodesByName["ZZ"];
+        
+        // Find shortest paths
+        var result = await ParallelPathFinder.FindPathsAsync(startNode, endNode);
+        
+        // Verify we found exactly 1 shortest path as documented in the test data
+        await Assert.That(result.PathCount).IsEqualTo(1);
+        
+        // Verify the shortest time (AA->AB is even/1 step, AB->BB is odd/1 step, BB->CB is even/1 step, CB->ZZ is odd/1 step = 4 steps)
+        await Assert.That(result.ShortestTime).IsEqualTo(4u);
+        
+        // Verify the path itself: AA -- AB -- BB -- CB -- ZZ
+        var path = result.ShortestPaths[0];
+        await Assert.That(path.Count).IsEqualTo(5);
+        await Assert.That(path[0].Name).IsEqualTo("AA");
+        await Assert.That(path[1].Name).IsEqualTo("AB");
+        await Assert.That(path[2].Name).IsEqualTo("BB");
+        await Assert.That(path[3].Name).IsEqualTo("CB");
+        await Assert.That(path[4].Name).IsEqualTo("ZZ");
     }
 }
