@@ -10,7 +10,7 @@ public class Node
 {
     public string Name { get; } // "AA", "AB", etc.
     public List<Connection> Edges { get; } = new();
-    public uint DiscardThreshold; // Tracks the FASTEST time we've ever seen a node reached. We use this to discard paths that are strictly slower.
+    public uint DiscardThreshold; // We use this to discard paths that are strictly slower. We usually set this to step + 2 when we first visit a node.
 
     public Node(string name)
     {

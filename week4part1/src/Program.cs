@@ -13,7 +13,7 @@ Console.WriteLine($"Finding shortest paths from {startNode.Name} to {targetNode.
 
 // Run pathfinder
 var stopwatch = Stopwatch.StartNew();
-var result = await ParallelPathFinder.FindPathsAsync(startNode, targetNode, graph);
+var result = await ParallelPathFinder.FindPathsAsync(startNode, targetNode);
 stopwatch.Stop();
 
 // Display results

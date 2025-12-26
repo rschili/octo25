@@ -2,52 +2,72 @@ using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Threading.Channels;
 
-public record Tracer(Node CurrentPosition, uint CurrentTime, ImmutableList<Node> History);
+public record Tracer(Node CurrentPosition, uint CurrentSteps, TraceHistory History);
 
-public record PathFinderResult(uint ShortestTime, ImmutableList<ImmutableList<Node>> ShortestPaths)
+public record PathFinderResult(uint ShortestTime, ImmutableList<List<Node>> ShortestPaths)
 {
     public int PathCount => ShortestPaths.Count;
 }
 
-public static class ParallelPathFinder
+// 1. Memory Optimization: A Class with Parent pointer (single linked list) instead of ImmutableList
+public class TraceHistory
 {
-    // Helper class to hold shared mutable state
-    private class SharedState
+    public Node Node { get; }
+    public TraceHistory? Parent { get; }
+
+    public TraceHistory(Node node, TraceHistory? parent)
     {
-        public uint GlobalShortestTime = uint.MaxValue;
-        public int ItemsInQueue = 1; // Seeded with 1 item
-        public readonly ConcurrentBag<(ImmutableList<Node> Path, uint Time)> WinningPaths = new();
-        public readonly object QueueLock = new();
+        Node = node;
+        Parent = parent;
     }
 
-    public static async Task<PathFinderResult> FindPathsAsync(Node startNode, Node targetNode, Graph graph)
+    // Helper to reconstruct path only when needed (at the end)
+    public List<Node> ToList()
     {
-        // Shared state for all workers
-        var state = new SharedState();
-        
-        // 1. Setup Channels (The Queue)
-        var channel = Channel.CreateUnbounded<Tracer>();
-
-        // 2. Initial Seed
-        Interlocked.Exchange(ref startNode.DiscardThreshold, 0);
-        await channel.Writer.WriteAsync(
-            new Tracer(startNode, 0, ImmutableList<Node>.Empty.Add(startNode))
-        );
-
-        // 3. Start Consumers (Workers)
-        var reader = channel.Reader;
-        List<Task> workers = new();
-
-        for (int i = 0; i < Environment.ProcessorCount; i++)
+        var list = new List<Node>();
+        var current = this;
+        while (current != null)
         {
-            workers.Add(Task.Run(() => ProcessTracers(reader, channel.Writer, targetNode, state)));
+            list.Add(current.Node);
+            current = current.Parent;
         }
+        list.Reverse();
+        return list;
+    }
+}
 
-        await Task.WhenAll(workers);
-        channel.Writer.Complete();
+public static class ParallelPathFinder
+{
+    public const int MaxSteps = 100;
 
-        // Filter and return results
+    private class SharedState
+    {
+        public required Node DestinationNode { get; init; }
+        public uint GlobalShortestTime = uint.MaxValue;
+        // Starts with 1 for the initial item. When we reach zero, we close the channel.
+        public int PendingWork = 1; 
+
+        public readonly ConcurrentBag<(List<Node> Path, uint Time)> WinningPaths = [];
+        public readonly ConcurrentDictionary<Node, uint> EarliestVisitorPerNode = new();
+    }
+
+    public static async Task<PathFinderResult> FindPathsAsync(Node startNode, Node destinationNode)
+    {
+        var state = new SharedState { DestinationNode = destinationNode };
+        var channel = Channel.CreateUnbounded<Tracer>();
+        await channel.Writer.WriteAsync(new Tracer(startNode, 0, new TraceHistory(startNode, null)));
+        state.EarliestVisitorPerNode[startNode] = 0;
+
+        // Spin off multiple workers to process incoming tracers in parallel
+        await Parallel.ForEachAsync(channel.Reader.ReadAllAsync(), new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount }, (tracer, ct) =>
+        {
+            // We don't await anything inside, we return ValueTask.CompletedTask implicitely.
+            ProcessSingleTracer(tracer, channel.Writer, state);
+            return ValueTask.CompletedTask;
+        });
+
         var bestTime = state.GlobalShortestTime;
+        // The WinningPaths bag may contain paths with longer times, filter them out.
         var bestPaths = state.WinningPaths
             .Where(result => result.Time == bestTime)
             .Select(result => result.Path)
@@ -56,119 +76,79 @@ public static class ParallelPathFinder
         return new PathFinderResult(bestTime, bestPaths);
     }
 
-    private static async Task ProcessTracers(
-        ChannelReader<Tracer> reader,
-        ChannelWriter<Tracer> writer,
-        Node targetNode,
-        SharedState state)
+    private static void ProcessSingleTracer(Tracer tracer, ChannelWriter<Tracer> writer, SharedState state)
     {
-        while (true)
+        try
         {
-            Tracer? trace = null;
-            
-            // Try to read an item
-            if (!reader.TryRead(out trace))
-            {
-                // Queue is empty, check if we should wait or exit
-                lock (state.QueueLock)
-                {
-                    if (state.ItemsInQueue == 0)
-                    {
-                        // No more work, exit
-                        return;
-                    }
-                }
-                
-                // Wait a bit for new items
-                await Task.Delay(1);
-                continue;
-            }
-            
-            // Decrement because we took an item
-            lock (state.QueueLock)
-            {
-                state.ItemsInQueue--;
-            }
+            // --- DISCARD CONDITIONS ---
+            if (tracer.CurrentSteps > MaxSteps) return;
+            if (tracer.CurrentSteps > state.GlobalShortestTime) return;
 
-            // --- STOP CONDITIONS ---
+            // Late node visit discard (another tracer already visited this node earlier, we cannot catch up)
+            uint earliestVisitor = state.EarliestVisitorPerNode.GetOrAdd(tracer.CurrentPosition, tracer.CurrentSteps);
+            if (tracer.CurrentSteps >= earliestVisitor + 2) // on +1 we may still catch up
+                return;
 
-            // A. Global Cutoff: If we already found a path at T=20, 
-            // any active trace at T=21 is useless.
-            if (trace.CurrentTime > state.GlobalShortestTime) continue;
-
-            // B. Node Cutoff: If another trace reached this node at T=10, 
-            // and we are here at T=12, we die.
-            // BUT: If we are here at T=10, we continue (to preserve our unique history).
-            uint recordTime = trace.CurrentPosition.DiscardThreshold;
-            if (trace.CurrentTime > recordTime) continue;
-
-            // Update the record if we are faster (thread-safe with Interlocked)
-            uint currentThreshold;
-            do
-            {
-                currentThreshold = trace.CurrentPosition.DiscardThreshold;
-                if (trace.CurrentTime >= currentThreshold)
-                    break; // Someone else already set a better or equal time
-            }
-            while (Interlocked.CompareExchange(ref trace.CurrentPosition.DiscardThreshold, trace.CurrentTime, currentThreshold) != currentThreshold);
+            if (tracer.CurrentSteps < earliestVisitor)
+                state.EarliestVisitorPerNode.TryUpdate(tracer.CurrentPosition, tracer.CurrentSteps, earliestVisitor);
 
             // --- TARGET CHECK ---
-            if (trace.CurrentPosition == targetNode)
+            if (tracer.CurrentPosition == state.DestinationNode)
             {
-                ProcessWin(trace, state);
-                continue;
+                ProcessWin(tracer, state);
+                return;
             }
 
             // --- BRANCHING ---
-            int newItemsAdded = 0;
-            foreach (var edge in trace.CurrentPosition.Edges)
+            foreach (var edge in tracer.CurrentPosition.Edges)
             {
-                // XOR: if timestep differ, we wait (add 2), otherwise proceed (add 1)
-                uint timeIncrement = (trace.CurrentTime % 2 == 0) ^ (edge.Timestep == Timestep.Even) ? 2u : 1u;
+                // step 1 or 2, depending on timestep match (waiting 1 turn at the node if needed)
+                uint stepIncrement = (tracer.CurrentSteps % 2 == 0) ^ (edge.Timestep == Timestep.Even) ? 2u : 1u;
 
-                if (writer.TryWrite(new Tracer(
+                // Increment BEFORE writing to prevent race condition where another worker
+                // could consume and complete the item before we account for it
+                Interlocked.Increment(ref state.PendingWork);
+
+                // TryWrite is strictly better here than WriteAsync because we want
+                // the inner loop to be synchronous and fast. 
+                // Unbounded channels never block on write, so TryWrite always returns true.
+                writer.TryWrite(new Tracer(
                     edge.Target,
-                    trace.CurrentTime + timeIncrement,
-                    trace.History.Add(edge.Target))))
-                {
-                    newItemsAdded++;
-                }
+                    tracer.CurrentSteps + stepIncrement,
+                    new TraceHistory(edge.Target, tracer.History)));
             }
-            
-            // Update the queue counter
-            if (newItemsAdded > 0)
+        }
+        finally
+        {
+            // Decrement for the item we just consumed
+            // If this brings the count to 0, we're done - no more work exists
+            if (Interlocked.Decrement(ref state.PendingWork) == 0)
             {
-                lock (state.QueueLock)
-                {
-                    state.ItemsInQueue += newItemsAdded;
-                }
+                // This closes the channel, causing ReadAllAsync() to stop yielding items,
+                // which causes Parallel.ForEachAsync to complete gracefully.
+                writer.Complete();
             }
         }
     }
 
     private static void ProcessWin(Tracer trace, SharedState state)
     {
-        // Thread-safe update of the global best score
         uint currentBest = state.GlobalShortestTime;
-        if (trace.CurrentTime < currentBest)
+        if (trace.CurrentSteps < currentBest)
         {
-            // We found a NEW faster path - update the score (thread-safe)
             uint oldValue;
             do
             {
                 oldValue = state.GlobalShortestTime;
-                if (trace.CurrentTime >= oldValue)
-                    break; // Someone else already found an equal or better path
+                if (trace.CurrentSteps >= oldValue) break;
             }
-            while (Interlocked.CompareExchange(ref state.GlobalShortestTime, trace.CurrentTime, oldValue) != oldValue);
+            while (Interlocked.CompareExchange(ref state.GlobalShortestTime, trace.CurrentSteps, oldValue) != oldValue);
             
-            // Add this path (we filter old paths at the end)
-            state.WinningPaths.Add((trace.History, trace.CurrentTime));
+            state.WinningPaths.Add((trace.History.ToList(), trace.CurrentSteps));
         }
-        else if (trace.CurrentTime == currentBest)
+        else if (trace.CurrentSteps == currentBest)
         {
-            // We found another path with the SAME best score. Keep it.
-            state.WinningPaths.Add((trace.History, trace.CurrentTime));
+            state.WinningPaths.Add((trace.History.ToList(), trace.CurrentSteps));
         }
     }
 }

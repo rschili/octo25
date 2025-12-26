@@ -12,7 +12,7 @@ I am implementing this in C#.
 
 Without thinking in well known algorithms, this is the approach that came to my mind:
 
-- I want to use channels and a fixed number of worker tasks that will process incoming "tracers".
+- I want to use channels and worker tasks that will process incoming "tracers" in a consumer pattern.
 - Each trace tracks its current timestep, they start at 0. (0 = even, 1= odd, 2 = even ....) and the path it came though (Can use immutable collections for this)
 - Since I need to collect all possible paths, I prefer forward-storing tracers over backtracking. (Strictly speaking, I need only track the COUNT of paths, but I want to store them for debugging/validation purposes)
 - When I reach a node, I branch into multiple tracers for each connected edge. Through each edge that doesn't match my timestep, I send a new tracer using timestep +2 (I waited 1 step at the node), through each edge that DOES match my timestep I send a new tracer with timestep + 1 (switches from odd to even and vice versa).
