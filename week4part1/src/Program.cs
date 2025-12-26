@@ -27,7 +27,7 @@ Console.WriteLine();
 Console.WriteLine("Shortest paths:");
 foreach (var path in result.ShortestPaths)
 {
-    var pathStr = string.Join(" -> ", path.Select(n => n.Name));
+    var pathStr = string.Join(" -> ", path.Select(n => $"{n.Node.Name}{(n.Waited ? " (waited)" : "")}"));
     Console.WriteLine($"  {pathStr}");
 }
 

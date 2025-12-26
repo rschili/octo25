@@ -2,9 +2,11 @@ using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Threading.Channels;
 
+public record NodeStep(Node Node, bool Waited);
+
 public record Tracer(Node CurrentPosition, uint CurrentSteps, TraceHistory History);
 
-public record PathFinderResult(uint ShortestTime, ImmutableList<List<Node>> ShortestPaths)
+public record PathFinderResult(uint ShortestTime, ImmutableList<List<NodeStep>> ShortestPaths)
 {
     public int PathCount => ShortestPaths.Count;
 }
@@ -14,21 +16,23 @@ public class TraceHistory
 {
     public Node Node { get; }
     public TraceHistory? Parent { get; }
+    public bool Waited { get; }
 
-    public TraceHistory(Node node, TraceHistory? parent)
+    public TraceHistory(Node node, TraceHistory? parent, bool waited = false)
     {
         Node = node;
         Parent = parent;
+        Waited = waited;
     }
 
     // Helper to reconstruct path only when needed (at the end)
-    public List<Node> ToList()
+    public List<NodeStep> ToList()
     {
-        var list = new List<Node>();
+        var list = new List<NodeStep>();
         var current = this;
         while (current != null)
         {
-            list.Add(current.Node);
+            list.Add(new NodeStep(current.Node, current.Waited));
             current = current.Parent;
         }
         list.Reverse();
@@ -47,7 +51,7 @@ public static class ParallelPathFinder
         // Starts with 1 for the initial item. When we reach zero, we close the channel.
         public int PendingWork = 1; 
 
-        public readonly ConcurrentBag<(List<Node> Path, uint Time)> WinningPaths = [];
+        public readonly ConcurrentBag<(List<NodeStep> Path, uint Time)> WinningPaths = [];
         public readonly ConcurrentDictionary<Node, uint> EarliestVisitorPerNode = new();
     }
 
@@ -115,7 +119,7 @@ public static class ParallelPathFinder
                 writer.TryWrite(new Tracer(
                     edge.Target,
                     tracer.CurrentSteps + stepIncrement,
-                    new TraceHistory(edge.Target, tracer.History)));
+                    new TraceHistory(edge.Target, tracer.History, stepIncrement == 2)));
             }
         }
         finally

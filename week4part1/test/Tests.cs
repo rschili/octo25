@@ -100,10 +100,58 @@ public class Tests
         // Verify the path itself: AA -- AB -- BB -- CB -- ZZ
         var path = result.ShortestPaths[0];
         await Assert.That(path.Count).IsEqualTo(5);
-        await Assert.That(path[0].Name).IsEqualTo("AA");
-        await Assert.That(path[1].Name).IsEqualTo("AB");
-        await Assert.That(path[2].Name).IsEqualTo("BB");
-        await Assert.That(path[3].Name).IsEqualTo("CB");
-        await Assert.That(path[4].Name).IsEqualTo("ZZ");
+        await Assert.That(path[0].Node.Name).IsEqualTo("AA");
+        await Assert.That(path[1].Node.Name).IsEqualTo("AB");
+        await Assert.That(path[2].Node.Name).IsEqualTo("BB");
+        await Assert.That(path[3].Node.Name).IsEqualTo("CB");
+        await Assert.That(path[4].Node.Name).IsEqualTo("ZZ");
+        
+        // Verify no waiting was needed for this optimal path
+        await Assert.That(path[0].Waited).IsFalse(); // AA (start)
+        await Assert.That(path[1].Waited).IsFalse(); // AB (even edge at even time)
+        await Assert.That(path[2].Waited).IsFalse(); // BB (odd edge at odd time)
+        await Assert.That(path[3].Waited).IsFalse(); // CB (even edge at even time)
+        await Assert.That(path[4].Waited).IsFalse(); // ZZ (odd edge at odd time)
+    }
+
+    [Test]
+    public async Task ParallelPathFinder_ChoosesShortestPathEvenWithWait()
+    {
+        // Create a graph where the shortest path requires a wait,
+        // but is still 3 nodes shorter than the no-wait alternative
+        const string testGraph = """
+        graph G {
+        "A" -- "B" [timestep="odd"];
+        "A" -- "D" [timestep="even"];
+        "B" -- "C" [timestep="even"];
+        "D" -- "E" [timestep="odd"];
+        "E" -- "F" [timestep="even"];
+        "F" -- "G" [timestep="odd"];
+        "G" -- "C" [timestep="even"];
+        }
+        """;
+        
+        Graph graph = DotFileReader.LoadFromDot(testGraph);
+        var startNode = graph.NodesByName["A"];
+        var endNode = graph.NodesByName["C"];
+        
+        var result = await ParallelPathFinder.FindPathsAsync(startNode, endNode);
+        
+        // The shortest path should be A -> B -> C (3 steps total, with 1 wait)
+        // Not A -> D -> E -> F -> G -> C (5 steps, no waits)
+        await Assert.That(result.ShortestTime).IsEqualTo(3u);
+        await Assert.That(result.PathCount).IsEqualTo(1);
+        
+        var path = result.ShortestPaths[0];
+        // Verify it's the short path: A -> B -> C (3 nodes vs 6 nodes)
+        await Assert.That(path.Count).IsEqualTo(3);
+        await Assert.That(path[0].Node.Name).IsEqualTo("A");
+        await Assert.That(path[1].Node.Name).IsEqualTo("B");
+        await Assert.That(path[2].Node.Name).IsEqualTo("C");
+        
+        // Verify wait behavior
+        await Assert.That(path[0].Waited).IsFalse(); // A (start, no wait)
+        await Assert.That(path[1].Waited).IsTrue();  // B (waited at A because edge is odd but we start at even time)
+        await Assert.That(path[2].Waited).IsFalse(); // C (no wait needed)
     }
 }
