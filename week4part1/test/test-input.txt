@@ -1,0 +1,14 @@
+graph G {
+	"AA" -- "BA" [timestep="odd"];
+	"AA" -- "AB" [timestep="even"];
+	"AB" -- "BB" [timestep="odd"];
+	"AB" -- "AC" [timestep="even"];
+	"AC" -- "BC" [timestep="odd"];
+	"BA" -- "CA" [timestep="even"];
+	"BA" -- "BB" [timestep="odd"];
+	"BB" -- "CB" [timestep="even"];
+	"BB" -- "BC" [timestep="odd"];
+	"BC" -- "ZZ" [timestep="odd"];
+	"CA" -- "CB" [timestep="even"];
+	"CB" -- "ZZ" [timestep="odd"];
+}
